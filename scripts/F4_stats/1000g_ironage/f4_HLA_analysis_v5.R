@@ -61,7 +61,7 @@ in_path  <- function(...) file.path(DATADIR, ...)
 # ---- File prefixes / metadata path ------------------------------------------
 CHR6_PREFIX <- "6.1000g.sea.nocommas"
 CHR1_PREFIX <- "1.1000g.sea.nocommas"
-META_PATH   <- "sampleInfo_240504_impute_neosea_v07_240627_impute_iadk_cluster_map_ascii_250601_impute_sea_sampleId.tsv"
+META_PATH   <- "sampleInfo.240504_impute_neosea.v07.240627_impute_iadk_cluster.map.ascii.250601_impute_sea_sampleId.tsv"
 
 # ---- Fixed populations ------------------------------------------------------
 OUTGROUP <- "Siberia_UpperPaleolithic_UstIshim"
