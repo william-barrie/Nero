@@ -78,22 +78,44 @@ def main():
           .merge(refpop, on="base_id", how="left")
           .merge(meta,   on="base_id", how="left"))
 
+    # The .ind "pop" column is a placeholder ('?') for these inputs, so treat
+    # it as a genuine label only if it is something other than '?'. This keeps
+    # '?' as a true last resort rather than letting it mask join failures.
+    ind_pop = df["pop"].where(df["pop"].ne("?"))
     df["final_pop"] = (df["ref_group"]
                        .fillna(df["pop_1000g"])
                        .fillna(df["groupLabel"])
-                       .fillna(df["pop"]))
+                       .fillna(ind_pop))
 
-    # --- write ---------------------------------------------------------------
-    df[["sample_id", "sex", "final_pop"]].to_csv(
-        args.out, sep=" ", header=False, index=False)
+    # Which rule actually resolved each sample (highest priority that hit).
+    src = pd.Series("unresolved (-> '?')", index=df.index)
+    src = src.mask(ind_pop.notna(),         ".ind pop column")
+    src = src.mask(df["groupLabel"].notna(), "metadata groupLabel")
+    src = src.mask(df["pop_1000g"].notna(),  "1000G ref pop")
+    src = src.mask(df["ref_group"].notna(),  "name2id ref_group")
+
+    unresolved = df["final_pop"].isna()
+
+    # --- write (fall back to '?' only for genuinely unresolved samples) ------
+    out = df[["sample_id", "sex", "final_pop"]].copy()
+    out["final_pop"] = out["final_pop"].fillna("?")
+    out.to_csv(args.out, sep=" ", header=False, index=False)
 
     # --- summary -------------------------------------------------------------
     print(f"  Total samples:              {len(df)}", file=sys.stderr)
-    print(f"  Labeled by name2id:         {df['ref_group'].notna().sum()}", file=sys.stderr)
-    print(f"  Labeled by 1000G ref pop:   {df['pop_1000g'].notna().sum()}", file=sys.stderr)
-    print(f"  Labeled by metadata gL:     {df['groupLabel'].notna().sum()}", file=sys.stderr)
-    print(f"  Unresolved:                 {df['final_pop'].isna().sum()}", file=sys.stderr)
-    print(f"  Distinct populations:       {df['final_pop'].nunique()}", file=sys.stderr)
+    for rule, n in src.value_counts().items():
+        print(f"    resolved by {rule:<22} {n}", file=sys.stderr)
+    print(f"  Unresolved (written '?'):   {unresolved.sum()}", file=sys.stderr)
+    print(f"  Distinct populations:       {out['final_pop'].nunique()}", file=sys.stderr)
+
+    # Break the unresolved set down by ID pattern -- 1000G samples look like
+    # HG#####/NA##### and should have been caught by the 1000G ref pop join.
+    if unresolved.any():
+        un = df.loc[unresolved, "sample_id"].astype(str)
+        n_1000g = un.str.match(r"^(HG|NA)\d").sum()
+        print(f"    of which look like 1000G ids (HG*/NA*): {n_1000g}",
+              file=sys.stderr)
+        print(f"    examples: {', '.join(un.head(5))}", file=sys.stderr)
 
 
 if __name__ == "__main__":
