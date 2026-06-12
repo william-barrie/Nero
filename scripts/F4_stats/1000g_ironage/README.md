@@ -41,8 +41,24 @@ files and re-run `prep_data.sh`; every earlier (expensive) step stays cached.
 
 ```bash
 bash prep_data.sh                 # produces the eigenstrat files
-Rscript f4_HLA_analysis_v5.R      # runs from the directory holding them
+Rscript f4_sanity_checks.R        # positive/negative controls (run this first)
+Rscript f4_HLA_analysis_v5.R      # the WHG-reference scan
 ```
+
+`f4_common.R` holds the shared streaming reader + f4/jackknife machinery, so
+the sanity checks and the scan compute f4 identically. The final scan is
+restricted to the **WHG reference** (`REFERENCES = "WHG"`; override with
+`NERO_REFERENCES="WHG,Yamnaya,..."`).
+
+### Sanity checks (`f4_sanity_checks.R`)
+
+A panel of well-known admixture events with textbook expected directions,
+computed on chr1 with the same block jackknife, written to `sanity_checks.csv`:
+Steppe ancestry N>S Europe, CHG in Yamnaya, hunter-gatherer resurgence
+(Late>Early Neolithic), Anatolian-farmer ancestry in S Europe, African gene
+flow Iberia>Finland, plus a CEU-vs-GBR null. Each is reported PASS / CHECK
+against a `|z| > 3` threshold. A failing control means the f4 set-up is not
+reproducing a known result — investigate before trusting the HLA scan.
 
 The R step is configurable via environment variables (defaults reproduce the
 previous in-place behaviour):
