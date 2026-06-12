@@ -16,6 +16,27 @@ populations, relative to a chromosome-1 genome-wide baseline.
 `prep_data.sh` is idempotent (skips steps whose output already exists; set
 `FORCE=1` to rebuild) and writes atomically (`.tmp` + rename).
 
+### Population labelling (`make_ind_labels.py`)
+
+The labelled `.ind_` is assembled from four sources, highest priority first:
+
+1. `name2id` — curated ancient reference groups (`allAncients`/`African` dropped).
+2. `--ref-pop` (`ref_pop_ids_mapped_grouped`) — ancient reference panel; the
+   **grouped** column is used (`RISE240,Yamnaya6,Yamnaya,1` → `Yamnaya`).
+3. `--igsr` (`igsr_samples.tsv`) — **modern 1000G** population codes
+   (`CEU/GBR/TSI/IBS/FIN/YRI/...`), keyed on `Sample name` → `Population code`.
+   Download the sample table from the [IGSR data portal](https://www.internationalgenome.org/data-portal/sample)
+   and place it next to the scripts (or point `IGSR=` at it).
+4. metadata `groupLabel` (sampleInfo TSV) — fallback, incl. ancient African sources.
+
+Samples that match none of the above are written as `?`. The script prints
+which rule resolved each sample, counts genuine `?` placeholders, and warns
+when 1000G-looking ids (`HG*/NA*`) fail to match `--igsr` or when any expected
+analysis population is absent — so a broken join is obvious from the output.
+
+To regenerate **only** the labels after fixing inputs, delete the `.ind_`
+files and re-run `prep_data.sh`; every earlier (expensive) step stays cached.
+
 ## Running the analysis
 
 ```bash
