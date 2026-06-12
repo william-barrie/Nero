@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---- Inputs -----------------------------------------------------------------
 ANCIENT_DIR="/projects/lundbeck/scratch/vrb229/project_sea/data/250601_impute_sea/merge/vcf"
 THOUSANDG_DIR="/projects/lundbeck/data/1000genomes_2015_nature"
-META="${SCRIPT_DIR}/sampleInfo_240504_impute_neosea_v07_240627_impute_iadk_cluster_map_ascii_250601_impute_sea_sampleId.tsv"
+META="${SCRIPT_DIR}/sampleInfo.240504_impute_neosea.v07.240627_impute_iadk_cluster.map.ascii.250601_impute_sea_sampleId.tsv"
 NAME2ID="${SCRIPT_DIR}/name2id"
 # Ancient reference panel (grouped labels: WHG/EHG/CHG/Farmer*/Yamnaya).
 REF_POP="/datasets/ukb-AUDIT/ref_pop_ids_mapped_grouped"
