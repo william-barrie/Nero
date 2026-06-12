@@ -45,6 +45,8 @@ panel <- rbind.data.frame(
     "FarmerAnatolian", "TSI", "WHG", "+"),
   c("African gene flow higher in Iberia than Finland (S>N)",
     "YRI", "IBS", "FIN", "+"),
+  c("N-African gene flow higher in Iberia than Finland (Morocco_HG donor)",
+    "Morocco_HG", "IBS", "FIN", "+"),
   c("NULL control: CEU vs GBR have ~equal Steppe ancestry",
     "Yamnaya", "CEU", "GBR", "0"),
   stringsAsFactors = FALSE)
