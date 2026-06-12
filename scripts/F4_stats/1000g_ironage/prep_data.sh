@@ -27,12 +27,7 @@ ANCIENT_DIR="/projects/lundbeck/scratch/vrb229/project_sea/data/250601_impute_se
 THOUSANDG_DIR="/projects/lundbeck/data/1000genomes_2015_nature"
 META="${SCRIPT_DIR}/sampleInfo.240504_impute_neosea.v07.240627_impute_iadk_cluster.map.ascii.250601_impute_sea_sampleId.tsv"
 NAME2ID="${SCRIPT_DIR}/name2id"
-# Ancient reference panel (grouped labels: WHG/EHG/CHG/Farmer*/Yamnaya).
 REF_POP="/datasets/ukb-AUDIT/ref_pop_ids_mapped_grouped"
-# Modern 1000G population codes (CEU/GBR/TSI/IBS/FIN/YRI/...). Download the
-# sample table from the IGSR data portal (https://www.internationalgenome.org)
-# and place it here, or point IGSR at its location.
-IGSR="${IGSR:-${SCRIPT_DIR}/igsr_samples.tsv}"
 
 CHRS=(1 6)
 OUT_DIR="${SCRIPT_DIR}"
@@ -109,7 +104,6 @@ for CHR in "${CHRS[@]}"; do
             --meta    "${META}" \
             --name2id "${NAME2ID}" \
             --ref-pop "${REF_POP}" \
-            --igsr    "${IGSR}" \
             --out     "${OUT_DIR}/${PREFIX}.ind_.tmp"
         mv "${OUT_DIR}/${PREFIX}.ind_.tmp" "${OUT_DIR}/${PREFIX}.ind_"
     else
