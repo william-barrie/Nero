@@ -83,7 +83,7 @@ REFERENCES <- strsplit(Sys.getenv("NERO_REFERENCES", "WHG"), ",")[[1]]
 REFERENCES <- trimws(REFERENCES[nzchar(trimws(REFERENCES))])
 
 # ---- Source-scan parameters -------------------------------------------------
-MIN_SOURCE_N <- 0   # min samples per candidate ancient African source pop
+MIN_SOURCE_N <- 3   # min samples per candidate ancient African source pop
 
 test_f4_hla_vs_control <- function(dat6, dat1, A, B, C, D) {
     f4_hla  <- compute_f4(dat6, A, B, C, D,
