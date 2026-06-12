@@ -122,4 +122,5 @@ done
 echo
 echo "All chromosomes processed. To re-run any step, delete its output file"
 echo "or invoke with FORCE=1 (e.g. 'FORCE=1 bash prep_data.sh')."
-echo "Run f4_HLA_analysis_v5.R next (memory-bounded; v4 retained for provenance)."
+echo "Next: Rscript f4_sanity_checks.R   (confirm known admixture events)"
+echo "then: Rscript f4_HLA_analysis_v5.R (the WHG-reference scan)."
