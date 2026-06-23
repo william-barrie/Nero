@@ -82,6 +82,55 @@ python3 hla_epitope_predictor.py --fasta proteome.fasta --combine --name my_data
 Parallel execution (`--n-jobs`, GNU `parallel`) works exactly as with NCBI
 input; each organism is analysed in turn with its alleles processed in parallel.
 
+#### Output layout
+
+When more than one organism/strain/identifier is analysed, each one is written
+to its own subdirectory of `--output-dir`, holding a
+`<name>_hla_predictions.csv`:
+
+```
+results/
+├── seq_A/seq_A_hla_predictions.csv
+├── seq_B/seq_B_hla_predictions.csv
+└── Variola_virus/Variola_virus_hla_predictions.csv
+```
+
+(For a single group, files are written directly into `--output-dir`.)
+
+### Summarising the predictions (`analyse_predictions.py`)
+
+`analyse_predictions.py` turns the raw `*_hla_predictions.csv` files above into
+per-allele strong/weak-binder statistics. After a `--fasta` run, point
+`--results-dir` at the same `--output-dir` and it auto-discovers and analyses
+every organism/identifier — no need to list them by hand:
+
+```bash
+# Summarise every organism/identifier produced by the FASTA run
+python3 analyse_predictions.py --results-dir ./results --output-dir ./analysed_results
+
+# Summarise only a subset of sequence identifiers / organisms
+# (case-insensitive substring match against the name)
+python3 analyse_predictions.py --results-dir ./results --select seq_A seq_B \
+    --output-dir ./analysed_results
+```
+
+`--select` here mirrors the predictor's `--select`: use it to summarise just the
+sequence identifiers you care about. You can still analyse a single file with
+`--input <name>/<name>_hla_predictions.csv`, or pass explicit directories with
+`--batch`.
+
+A common end-to-end workflow for a subset of identifiers is therefore:
+
+```bash
+# 1. Predict for just the chosen identifiers from the FASTA file
+python3 hla_epitope_predictor.py --fasta proteome.fasta \
+    --select seq_A seq_B --output-dir ./results
+
+# 2. Summarise the same subset
+python3 analyse_predictions.py --results-dir ./results \
+    --select seq_A seq_B --output-dir ./analysed_results
+```
+
 ## Quick Start
 
 ### 1. Install Dependencies
