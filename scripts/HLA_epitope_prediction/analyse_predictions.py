@@ -190,6 +190,88 @@ def analyse_predictions(
     return True
 
 
+def organism_name_from_predictions(predictions_file: Path) -> str:
+    """Derive the organism/strain (or sequence identifier) name from a
+    predictions file written by the pipeline.
+
+    Files are named ``{name}_hla_predictions.csv`` (or, with the legacy
+    convention, ``{name}_hla_binding_results.csv``), where ``{name}`` is the
+    organism/strain or, for bare-identifier FASTA records, the sequence ID.
+    """
+    stem = predictions_file.stem
+    for suffix in ('_hla_predictions', '_hla_binding_results'):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
+def discover_prediction_dirs(results_dir: Path,
+                             select: list = None) -> list:
+    """Find every directory under ``results_dir`` that holds a predictions file.
+
+    This is the companion to running ``hla_epitope_predictor.py --fasta``: that
+    run writes one ``<name>/<name>_hla_predictions.csv`` per organism/strain (or
+    per sequence identifier when headers carry no organism), and this walks the
+    base ``--output-dir`` to collect them all automatically.
+
+    Args:
+        results_dir: Base output directory from a prediction run.
+        select: Optional list of names. When given, only directories whose
+            organism/identifier name matches one of these (case-insensitive
+            substring) are returned, so a subset of sequence identifiers can be
+            analysed.
+
+    Returns:
+        Sorted list of directories, each containing a predictions CSV.
+    """
+    results_dir = Path(results_dir)
+    if not results_dir.exists():
+        raise FileNotFoundError(f"Results directory not found: {results_dir}")
+
+    predictions_files = sorted(results_dir.rglob("*_hla_predictions.csv"))
+    if not predictions_files:
+        predictions_files = sorted(results_dir.rglob("*_hla_binding_results.csv"))
+
+    if not predictions_files:
+        raise ValueError(
+            f"No '*_hla_predictions.csv' files found under {results_dir}. "
+            f"Point --results-dir at the --output-dir used for the prediction run."
+        )
+
+    # De-duplicate directories while preserving order.
+    dirs = []
+    seen = set()
+    for pf in predictions_files:
+        if pf.parent not in seen:
+            seen.add(pf.parent)
+            dirs.append(pf.parent)
+
+    if select:
+        sel_lower = [s.lower() for s in select]
+        filtered = []
+        for d in dirs:
+            pf = (sorted(d.glob("*_hla_predictions.csv")) or
+                  sorted(d.glob("*_hla_binding_results.csv")))[0]
+            name = organism_name_from_predictions(pf).lower()
+            if any(s in name or s in d.name.lower() for s in sel_lower):
+                filtered.append(d)
+
+        if not filtered:
+            available = ", ".join(
+                organism_name_from_predictions(
+                    (sorted(d.glob("*_hla_predictions.csv")) or
+                     sorted(d.glob("*_hla_binding_results.csv")))[0]
+                ) for d in dirs
+            )
+            raise ValueError(
+                f"No predictions matched --select {select}. "
+                f"Available: {available}"
+            )
+        dirs = filtered
+
+    return dirs
+
+
 def batch_analyse(analysis_dirs: list, output_dir: Path,
                   class_i_strong_threshold: float = 0.5,
                   class_i_weak_threshold: float = 2.0,
@@ -228,7 +310,11 @@ def batch_analyse(analysis_dirs: list, output_dir: Path,
             continue
 
         predictions_file = predictions_files[0]
-        organism_name = analysis_path.name.replace('_analysis', '')
+        # Prefer the name embedded in the predictions filename (the organism /
+        # strain / sequence identifier), falling back to the directory name.
+        organism_name = organism_name_from_predictions(predictions_file)
+        if not organism_name:
+            organism_name = analysis_path.name.replace('_analysis', '')
 
         logger.info(f"\n{'='*60}")
         logger.info(f"Analysing: {organism_name}")
@@ -258,6 +344,13 @@ Examples:
   python analyse_predictions.py --batch \\
       smallpox_analysis HIV_analysis plague_analysis
 
+  # Analyse every organism/identifier produced by a --fasta prediction run
+  # (auto-discovers each <name>/<name>_hla_predictions.csv under the dir)
+  python analyse_predictions.py --results-dir ./results
+
+  # Same, but only a subset of sequence identifiers / organisms
+  python analyse_predictions.py --results-dir ./results --select seq_A seq_B
+
   # Custom thresholds
   python analyse_predictions.py --input results.csv \\
       --class-i-strong 0.05 --class-i-weak 0.5 \\
@@ -274,6 +367,19 @@ Examples:
     input_group.add_argument(
         '--batch', nargs='+',
         help='Multiple analysis directories to process'
+    )
+    input_group.add_argument(
+        '--results-dir', type=Path,
+        help='Base output directory from a prediction run (e.g. the --output-dir '
+             'used with hla_epitope_predictor.py --fasta). Every '
+             '<name>/<name>_hla_predictions.csv beneath it is analysed.'
+    )
+
+    parser.add_argument(
+        '--select', nargs='+', metavar='NAME',
+        help='With --results-dir, only analyse organisms/strains or sequence '
+             'identifiers whose name matches one of these (case-insensitive '
+             'substring).'
     )
 
     # Class I thresholds
@@ -304,6 +410,9 @@ Examples:
 
     args = parser.parse_args()
 
+    if args.select and not args.results_dir:
+        parser.error("--select can only be used together with --results-dir.")
+
     try:
         if args.input:
             # Single file analysis
@@ -321,6 +430,24 @@ Examples:
             # Batch analysis
             batch_analyse(
                 args.batch,
+                args.output_dir,
+                args.class_i_strong,
+                args.class_i_weak,
+                args.class_ii_strong,
+                args.class_ii_weak
+            )
+            sys.exit(0)
+
+        elif args.results_dir:
+            # Auto-discover per-organism/identifier prediction dirs (e.g. from
+            # a --fasta run) and batch-analyse them, optionally filtered.
+            analysis_dirs = discover_prediction_dirs(args.results_dir, args.select)
+            logger.info(
+                f"Discovered {len(analysis_dirs)} prediction directory(ies) "
+                f"under {args.results_dir}"
+            )
+            batch_analyse(
+                analysis_dirs,
                 args.output_dir,
                 args.class_i_strong,
                 args.class_i_weak,
