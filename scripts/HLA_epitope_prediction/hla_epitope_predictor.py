@@ -156,20 +156,25 @@ class FastaInputHandler:
         the trailing square brackets).
       - UniProt style: ``>db|ACC|NAME ... OS=Organism name OX=taxid ...``
         (organism after the ``OS=`` token).
+
+    When a header carries no recognisable organism information (the sequence
+    identifier is all that is available), the sequence is treated as its own
+    standalone group keyed by that identifier, so each such sequence is
+    analysed and saved separately rather than being lumped together.
     """
 
     UNKNOWN_ORGANISM = "unknown_organism"
 
     @staticmethod
-    def parse_organism_from_header(description: str) -> str:
+    def parse_organism_from_header(description: str) -> Optional[str]:
         """Infer the organism/strain name from a FASTA header description.
 
-        Returns ``UNKNOWN_ORGANISM`` when no organism can be confidently
-        extracted so those sequences are still grouped together rather than
-        silently dropped.
+        Returns ``None`` when no organism can be confidently extracted, so the
+        caller can fall back to using the sequence identifier as a standalone
+        group rather than merging unrelated sequences together.
         """
         if not description:
-            return FastaInputHandler.UNKNOWN_ORGANISM
+            return None
 
         # UniProt style: organism follows "OS=" up to the next KEY= token.
         os_match = re.search(r'\bOS=(.+?)(?:\s+[A-Z]{2}=|$)', description)
@@ -181,13 +186,18 @@ class FastaInputHandler:
         if brackets:
             return brackets[-1].strip()
 
-        return FastaInputHandler.UNKNOWN_ORGANISM
+        return None
 
     @staticmethod
     def group_by_organism(fasta_file: Path) -> "dict":
         """Group the records of a FASTA file by inferred organism/strain.
 
-        Returns an insertion-ordered dict mapping organism name to the list of
+        Sequences whose headers share an organism/strain are grouped together.
+        Sequences with no parseable organism (only a sequence identifier) each
+        become their own group keyed by that identifier, so they are analysed
+        and reported separately as if they were distinct organisms/strains.
+
+        Returns an insertion-ordered dict mapping group name to the list of
         SeqRecords belonging to it.
         """
         fasta_file = Path(fasta_file)
@@ -196,10 +206,16 @@ class FastaInputHandler:
 
         groups: Dict[str, List[SeqRecord]] = {}
         n_records = 0
+        n_by_identifier = 0
         with open(fasta_file) as f:
             for record in SeqIO.parse(f, "fasta"):
                 n_records += 1
                 organism = FastaInputHandler.parse_organism_from_header(record.description)
+                if organism is None:
+                    # No organism info available: key on the sequence's own
+                    # identifier so it is treated as a standalone group.
+                    organism = record.id or FastaInputHandler.UNKNOWN_ORGANISM
+                    n_by_identifier += 1
                 groups.setdefault(organism, []).append(record)
 
         if n_records == 0:
@@ -209,6 +225,11 @@ class FastaInputHandler:
             f"Parsed {n_records} sequences from {fasta_file} "
             f"spanning {len(groups)} organism/strain group(s)"
         )
+        if n_by_identifier:
+            logger.info(
+                f"  ({n_by_identifier} sequence(s) had no organism in their header "
+                f"and are each treated as a separate group keyed by sequence ID)"
+            )
         for organism, records in groups.items():
             logger.info(f"  - {organism}: {len(records)} sequence(s)")
 

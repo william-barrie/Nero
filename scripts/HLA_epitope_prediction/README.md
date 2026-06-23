@@ -50,8 +50,12 @@ conventions:
 - **UniProt style** — organism after the `OS=` token:
   `>sp|P12345|NAME ... OS=Homo sapiens OX=9606 GN=ABC PE=1 SV=2`
 
-Sequences whose organism cannot be determined are grouped under
-`unknown_organism` rather than dropped.
+When a header carries no organism information at all — the sequence identifier
+is all that is available — that sequence is treated as its **own standalone
+group**, keyed by its identifier. Each such sequence is therefore analysed and
+saved separately, as if it were a distinct organism/strain, rather than being
+merged into a single shared bucket. This is the common case for FASTA files
+whose headers are bare accession/ID lines (e.g. `>NP_042094.1`).
 
 ```bash
 # Inspect which organisms/strains are in the file (no analysis is run)
