@@ -9,6 +9,7 @@ Author: Refactored for better maintainability and incremental processing
 """
 
 import os
+import re
 import sys
 import subprocess
 import json
@@ -132,6 +133,145 @@ class ProteomeDownloader:
             SeqIO.write(all_records, f, "fasta")
 
         logger.info(f"Downloaded {len(all_records)} sequences to {output_file}")
+        return output_file
+
+
+def sanitize_name(name: str) -> str:
+    """Convert an arbitrary organism/strain/sequence name into a safe filename."""
+    safe = re.sub(r'[^\w\-.]+', '_', name.strip())
+    safe = safe.strip('_')
+    return safe or "unknown"
+
+
+class FastaInputHandler:
+    """Parse a local FASTA file and group sequences by organism/strain.
+
+    Supports FASTA files that contain sequences from multiple organisms or
+    strains. The organism/strain is inferred from each record's header line so
+    that the pipeline can either analyse every organism in the file
+    automatically (one analysis per organism) or just a user-selected subset.
+
+    Recognised header conventions:
+      - NCBI style: ``>ACC description [Organism name strain X]`` (organism in
+        the trailing square brackets).
+      - UniProt style: ``>db|ACC|NAME ... OS=Organism name OX=taxid ...``
+        (organism after the ``OS=`` token).
+    """
+
+    UNKNOWN_ORGANISM = "unknown_organism"
+
+    @staticmethod
+    def parse_organism_from_header(description: str) -> str:
+        """Infer the organism/strain name from a FASTA header description.
+
+        Returns ``UNKNOWN_ORGANISM`` when no organism can be confidently
+        extracted so those sequences are still grouped together rather than
+        silently dropped.
+        """
+        if not description:
+            return FastaInputHandler.UNKNOWN_ORGANISM
+
+        # UniProt style: organism follows "OS=" up to the next KEY= token.
+        os_match = re.search(r'\bOS=(.+?)(?:\s+[A-Z]{2}=|$)', description)
+        if os_match:
+            return os_match.group(1).strip()
+
+        # NCBI style: organism (and often strain) in trailing square brackets.
+        brackets = re.findall(r'\[([^\[\]]+)\]', description)
+        if brackets:
+            return brackets[-1].strip()
+
+        return FastaInputHandler.UNKNOWN_ORGANISM
+
+    @staticmethod
+    def group_by_organism(fasta_file: Path) -> "dict":
+        """Group the records of a FASTA file by inferred organism/strain.
+
+        Returns an insertion-ordered dict mapping organism name to the list of
+        SeqRecords belonging to it.
+        """
+        fasta_file = Path(fasta_file)
+        if not fasta_file.exists():
+            raise FileNotFoundError(f"FASTA file not found: {fasta_file}")
+
+        groups: Dict[str, List[SeqRecord]] = {}
+        n_records = 0
+        with open(fasta_file) as f:
+            for record in SeqIO.parse(f, "fasta"):
+                n_records += 1
+                organism = FastaInputHandler.parse_organism_from_header(record.description)
+                groups.setdefault(organism, []).append(record)
+
+        if n_records == 0:
+            raise ValueError(f"No sequences found in FASTA file: {fasta_file}")
+
+        logger.info(
+            f"Parsed {n_records} sequences from {fasta_file} "
+            f"spanning {len(groups)} organism/strain group(s)"
+        )
+        for organism, records in groups.items():
+            logger.info(f"  - {organism}: {len(records)} sequence(s)")
+
+        return groups
+
+    @staticmethod
+    def select_groups(groups: "dict", selections: Optional[List[str]]) -> "dict":
+        """Filter grouped records down to a user-specified selection.
+
+        Each selection string is matched (case-insensitively) first against
+        organism/strain names (substring match) and then, if it matches no
+        organism, against individual sequence IDs/descriptions. Selected
+        sequences that are picked by ID are grouped under that organism so the
+        normal per-organism workflow still applies.
+
+        With no selections, all groups are returned unchanged.
+        """
+        if not selections:
+            return groups
+
+        selected: Dict[str, List[SeqRecord]] = {}
+        for selection in selections:
+            sel_lower = selection.lower()
+
+            # 1) Match against organism/strain group names.
+            org_matches = [org for org in groups if sel_lower in org.lower()]
+            if org_matches:
+                for org in org_matches:
+                    selected.setdefault(org, [])
+                    existing_ids = {r.id for r in selected[org]}
+                    for rec in groups[org]:
+                        if rec.id not in existing_ids:
+                            selected[org].append(rec)
+                continue
+
+            # 2) Otherwise match against individual sequence IDs/descriptions.
+            id_matched = False
+            for org, records in groups.items():
+                for rec in records:
+                    if sel_lower == rec.id.lower() or sel_lower in rec.description.lower():
+                        selected.setdefault(org, [])
+                        if rec.id not in {r.id for r in selected[org]}:
+                            selected[org].append(rec)
+                        id_matched = True
+
+            if not id_matched:
+                available = ", ".join(groups.keys())
+                raise ValueError(
+                    f"Selection '{selection}' did not match any organism/strain "
+                    f"or sequence ID in the FASTA file. "
+                    f"Available organisms: {available}"
+                )
+
+        return selected
+
+    @staticmethod
+    def write_group(records: List[SeqRecord], output_file: Path) -> Path:
+        """Write a group of records to a FASTA file."""
+        output_file = Path(output_file)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, 'w') as f:
+            SeqIO.write(records, f, "fasta")
+        logger.info(f"Wrote {len(records)} sequences to {output_file}")
         return output_file
 
 
@@ -678,13 +818,18 @@ class HLAEpitopePipeline:
         return df
 
     def run_full_analysis(self, class_i_alleles: List[str],
-                         class_ii_alleles: List[str]) -> Path:
+                         class_ii_alleles: List[str],
+                         proteome_file: Optional[Path] = None) -> Path:
         """
         Run complete analysis pipeline.
 
         Args:
             class_i_alleles: List of HLA Class I alleles
             class_ii_alleles: List of HLA Class II alleles
+            proteome_file: Optional pre-existing proteome FASTA to analyse. When
+                provided (e.g. from a user-supplied FASTA file), the NCBI
+                download step is skipped. When None, the proteome is downloaded
+                from NCBI using the configured organism query.
 
         Returns:
             Path to combined results CSV
@@ -699,16 +844,22 @@ class HLAEpitopePipeline:
         logger.info(f"  Parallel jobs: {self.config.n_parallel_jobs}")
         logger.info("")
 
-        # Download proteome
-        proteome_file = self.output_dir / f"{self.config.organism_name}_proteome.fasta"
-        if not proteome_file.exists():
-            self.downloader.download(
-                self.config.organism_query,
-                proteome_file,
-                self.config.max_proteins
-            )
+        # Obtain proteome: use a supplied FASTA if given, otherwise download.
+        if proteome_file is not None:
+            proteome_file = Path(proteome_file)
+            if not proteome_file.exists():
+                raise FileNotFoundError(f"Proteome FASTA not found: {proteome_file}")
+            logger.info(f"Using provided proteome FASTA: {proteome_file}")
         else:
-            logger.info(f"Using existing proteome: {proteome_file}")
+            proteome_file = self.output_dir / f"{self.config.organism_name}_proteome.fasta"
+            if not proteome_file.exists():
+                self.downloader.download(
+                    self.config.organism_query,
+                    proteome_file,
+                    self.config.max_proteins
+                )
+            else:
+                logger.info(f"Using existing proteome: {proteome_file}")
 
         # Run Class I analysis
         class_i_df = self.run_class_i_analysis(proteome_file, class_i_alleles)
@@ -881,6 +1032,17 @@ Examples:
   # Run with conservative defaults (9-mers, step=3, ~10x faster)
   python hla_epitope_predictor.py --email user@example.com --organism "Variola virus[Organism]"
 
+  # Run directly from a local FASTA file (no NCBI download)
+  python hla_epitope_predictor.py --fasta proteome.fasta --output-dir ./my_analysis
+
+  # FASTA with multiple organisms/strains: list what was detected, then run all
+  python hla_epitope_predictor.py --fasta multi_organism.fasta --list-organisms
+  python hla_epitope_predictor.py --fasta multi_organism.fasta --output-dir ./results
+
+  # FASTA input but only analyse a chosen organism/strain or sequence
+  python hla_epitope_predictor.py --fasta multi_organism.fasta --select "Variola virus"
+  python hla_epitope_predictor.py --fasta multi_organism.fasta --select NP_042094.1
+
   # Run with custom allele files
   python hla_epitope_predictor.py --email user@example.com --organism "HIV[Organism]" \\
       --class-i-alleles class_i_alleles.txt --class-ii-alleles class_ii_alleles.txt
@@ -899,11 +1061,26 @@ Examples:
         """
     )
 
-    # Required arguments
-    parser.add_argument("--email", required=True,
-                       help="Email for NCBI Entrez API")
-    parser.add_argument("--organism", required=True,
-                       help="NCBI organism query (e.g., 'Variola virus[Organism]')")
+    # Input source: either an NCBI query (--organism) or a local FASTA file
+    # (--fasta). Exactly one of these must be provided.
+    parser.add_argument("--email",
+                       help="Email for NCBI Entrez API (required with --organism)")
+    parser.add_argument("--organism",
+                       help="NCBI organism query (e.g., 'Variola virus[Organism]'). "
+                            "Mutually exclusive with --fasta.")
+    parser.add_argument("--fasta", type=Path,
+                       help="Local FASTA file to analyse instead of downloading from "
+                            "NCBI. May contain multiple organisms/strains (detected "
+                            "from header lines); by default every organism is analysed.")
+    parser.add_argument("--select", nargs='+', metavar="NAME",
+                       help="With --fasta, only analyse the given organism/strain "
+                            "name(s) or sequence ID(s). May be given multiple values.")
+    parser.add_argument("--combine", action="store_true",
+                       help="With --fasta, treat the whole file as a single proteome "
+                            "instead of splitting by organism/strain.")
+    parser.add_argument("--list-organisms", action="store_true",
+                       help="With --fasta, list the organisms/strains detected in the "
+                            "file (and sequence counts) then exit without running.")
 
     # Optional arguments
     parser.add_argument("--output-dir", default="./hla_analysis",
@@ -951,31 +1128,34 @@ Examples:
 
     args = parser.parse_args()
 
-    # Generate organism name if not provided
-    organism_name = args.name
-    if not organism_name:
-        import re
-        organism_name = re.sub(r'[^\w\-_.]', '_', args.organism)
+    # Validate input source: exactly one of --organism / --fasta.
+    if bool(args.organism) == bool(args.fasta):
+        parser.error("Provide exactly one input source: --organism (NCBI) or --fasta (local file).")
+    if args.organism and not args.email:
+        parser.error("--email is required when using --organism (NCBI download).")
+    if not args.fasta and (args.select or args.combine or args.list_organisms):
+        parser.error("--select/--combine/--list-organisms can only be used with --fasta.")
 
-    # Create config
-    config = AnalysisConfig(
-        email=args.email,
-        organism_query=args.organism,
-        output_dir=args.output_dir,
-        organism_name=organism_name,
-        netmhcpan_path=args.netmhcpan_path,
-        netmhciipan_path=args.netmhciipan_path,
-        signalp_model_dir=args.signalp_model_dir,
-        n_parallel_jobs=args.n_jobs,
-        class_i_peptide_lengths=args.class_i_lengths,
-        class_i_step_size=args.class_i_step,
-        class_ii_peptide_length=args.class_ii_length,
-        class_ii_step_size=args.class_ii_step,
-        max_proteins=args.max_proteins,
-        temp_dir=args.temp_dir
-    )
+    # Build the helper that constructs a config + allele lists for one analysis.
+    def build_config(organism_query: str, output_dir: Path, organism_name: str) -> AnalysisConfig:
+        return AnalysisConfig(
+            email=args.email or "",
+            organism_query=organism_query,
+            output_dir=output_dir,
+            organism_name=organism_name,
+            netmhcpan_path=args.netmhcpan_path,
+            netmhciipan_path=args.netmhciipan_path,
+            signalp_model_dir=args.signalp_model_dir,
+            n_parallel_jobs=args.n_jobs,
+            class_i_peptide_lengths=args.class_i_lengths,
+            class_i_step_size=args.class_i_step,
+            class_ii_peptide_length=args.class_ii_length,
+            class_ii_step_size=args.class_ii_step,
+            max_proteins=args.max_proteins,
+            temp_dir=args.temp_dir
+        )
 
-    # Load or use default alleles
+    # Load or use default alleles (shared across all analyses in this run).
     if args.class_i_alleles:
         class_i_alleles = load_alleles_from_file(args.class_i_alleles)
     else:
@@ -988,15 +1168,72 @@ Examples:
         class_ii_alleles = get_default_class_ii_alleles()
         logger.info(f"Using {len(class_ii_alleles)} default Class II alleles")
 
-    # Run pipeline
     try:
-        pipeline = HLAEpitopePipeline(config)
-        result_file = pipeline.run_full_analysis(class_i_alleles, class_ii_alleles)
+        if args.fasta:
+            # --- Local FASTA input (one analysis per organism/strain) ---
+            groups = FastaInputHandler.group_by_organism(args.fasta)
 
-        print(f"\n{'='*80}")
-        print("Analysis completed successfully!")
-        print(f"Results saved to: {result_file}")
-        print(f"{'='*80}\n")
+            if args.list_organisms:
+                print(f"\nDetected {len(groups)} organism/strain group(s) in {args.fasta}:")
+                for organism, records in groups.items():
+                    print(f"  - {organism}: {len(records)} sequence(s)")
+                print("")
+                return
+
+            if args.combine:
+                # Treat the entire file as a single proteome.
+                combined_name = args.name or sanitize_name(Path(args.fasta).stem)
+                groups = {combined_name: [r for recs in groups.values() for r in recs]}
+            else:
+                groups = FastaInputHandler.select_groups(groups, args.select)
+
+            base_output_dir = Path(args.output_dir)
+            multiple = len(groups) > 1
+            logger.info(f"Running analysis for {len(groups)} organism/strain group(s)")
+
+            result_files = []
+            for organism, records in groups.items():
+                organism_name = args.name if (args.name and not multiple) else sanitize_name(organism)
+                # Nest per-organism outputs only when there is more than one group.
+                output_dir = base_output_dir / organism_name if multiple else base_output_dir
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                # Write this group's sequences to its own proteome FASTA.
+                proteome_file = output_dir / f"{organism_name}_proteome.fasta"
+                FastaInputHandler.write_group(records, proteome_file)
+
+                config = build_config(
+                    organism_query=f"FASTA input: {organism}",
+                    output_dir=output_dir,
+                    organism_name=organism_name,
+                )
+                pipeline = HLAEpitopePipeline(config)
+                result_file = pipeline.run_full_analysis(
+                    class_i_alleles, class_ii_alleles, proteome_file=proteome_file
+                )
+                result_files.append(result_file)
+
+            print(f"\n{'='*80}")
+            print("Analysis completed successfully!")
+            for result_file in result_files:
+                print(f"Results saved to: {result_file}")
+            print(f"{'='*80}\n")
+
+        else:
+            # --- NCBI download input (original behaviour) ---
+            organism_name = args.name or sanitize_name(args.organism)
+            config = build_config(
+                organism_query=args.organism,
+                output_dir=Path(args.output_dir),
+                organism_name=organism_name,
+            )
+            pipeline = HLAEpitopePipeline(config)
+            result_file = pipeline.run_full_analysis(class_i_alleles, class_ii_alleles)
+
+            print(f"\n{'='*80}")
+            print("Analysis completed successfully!")
+            print(f"Results saved to: {result_file}")
+            print(f"{'='*80}\n")
 
     except Exception as e:
         logger.error(f"Analysis failed: {e}", exc_info=True)

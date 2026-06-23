@@ -30,6 +30,54 @@ This pipeline uses **RefSeq[Filter]** in all organism queries to ensure:
 
 This automatically fetches the official RefSeq reference genome without needing to specify exact strain names.
 
+## Input Sources
+
+The pipeline accepts **either** of two mutually exclusive input sources:
+
+1. **NCBI download** (`--organism` + `--email`): downloads the proteome from
+   NCBI as described above.
+2. **Local FASTA file** (`--fasta`): analyses sequences from a FASTA file you
+   already have, with no network access required.
+
+### Using a Local FASTA File
+
+A single FASTA file may contain sequences for **multiple organisms or strains**.
+The organism/strain is inferred from each header line, supporting both common
+conventions:
+
+- **NCBI style** — organism (and strain) in trailing square brackets:
+  `>NP_042094.1 hypothetical protein [Variola virus]`
+- **UniProt style** — organism after the `OS=` token:
+  `>sp|P12345|NAME ... OS=Homo sapiens OX=9606 GN=ABC PE=1 SV=2`
+
+Sequences whose organism cannot be determined are grouped under
+`unknown_organism` rather than dropped.
+
+```bash
+# Inspect which organisms/strains are in the file (no analysis is run)
+python3 hla_epitope_predictor.py --fasta proteome.fasta --list-organisms
+
+# Analyse EVERY organism/strain automatically (one analysis each).
+# When more than one organism is present, results are written to a
+# per-organism subdirectory of --output-dir.
+python3 hla_epitope_predictor.py --fasta proteome.fasta --output-dir ./results
+
+# Analyse only a chosen organism/strain (name substring, case-insensitive)
+python3 hla_epitope_predictor.py --fasta proteome.fasta --select "Variola virus"
+
+# Analyse only a chosen sequence by its FASTA ID
+python3 hla_epitope_predictor.py --fasta proteome.fasta --select NP_042094.1
+
+# Select multiple organisms and/or sequence IDs at once
+python3 hla_epitope_predictor.py --fasta proteome.fasta --select "Measles" NP_042094.1
+
+# Treat the whole file as a single combined proteome (ignore organism splitting)
+python3 hla_epitope_predictor.py --fasta proteome.fasta --combine --name my_dataset
+```
+
+Parallel execution (`--n-jobs`, GNU `parallel`) works exactly as with NCBI
+input; each organism is analysed in turn with its alleles processed in parallel.
+
 ## Quick Start
 
 ### 1. Install Dependencies
